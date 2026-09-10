@@ -81,6 +81,17 @@ uint8_t digest[GOST_HASH_MAX_DIGEST];
 gost_hash(data, len, GOST_HASH_256, digest);   /* compatible con el proyecto JS */
 ```
 
+Para hashear texto igual que el servicio de referencia (que codifica cada
+cadena a UTF-16LE antes de hashear), usa `gost_hash_text`:
+
+```c
+gost_hash_text("Chikatina", strlen("Chikatina"), GOST_HASH_256, digest);
+/* be50... : idéntico a EncryptService.hash("Chikatina") */
+```
+
+`gost_text_utf16le` expone la codificación por separado para mensajes
+mayores, y `gost_hash`/`gost_hash_update` aceptan esos bytes directamente.
+
 ### Firma digital (equivalente a `sign` / `verify` de `encrypt.js`)
 
 ```c
@@ -103,7 +114,7 @@ gost_signature_verify_message(gost_curve(GOST_CURVE_2001_CRYPTOPRO_C),
 | --- | --- |
 | `EncryptService.reversible_encrypt` | `gost_cipher_cfb_encrypt` |
 | `EncryptService.decrypt` | `gost_cipher_cfb_decrypt` |
-| `EncryptService.hash` | `gost_hash` (GOST_HASH_256) |
+| `EncryptService.hash` | `gost_hash_text` (hashea la cadena codificada en UTF-16LE) |
 | `EncryptService.sign` | `gost_signature_sign_message` |
 | `EncryptService.verify` | `gost_signature_verify_message` |
 | `ЭЦП.Сгенерировать_ключи` | `gost_signature_generate_keys` |
@@ -111,11 +122,11 @@ gost_signature_verify_message(gost_curve(GOST_CURVE_2001_CRYPTOPRO_C),
 | `Шифрование.Гаммование` | `gost_cipher_gamma` |
 | `Шифрование.Простая_замена` | `gost_cipher_ecb_encrypt` / `gost_cipher_ecb_decrypt` |
 | `Шифрование.Имитовставка` | `gost_cipher_mac` |
-| `Код.Строку_в_байты` | codificación UTF-16LE a cargo de la aplicación |
+| `Код.Строку_в_байты` | `gost_text_utf16le` |
 
-La codificación de cadenas queda fuera de la librería: en C los mensajes son
-arreglos de bytes; `Код.Строку_в_байты` del proyecto JS equivale a codificar
-el texto en UTF-16LE antes de pasarlo a la API.
+La codificación de cadenas vive en la feature `gost/text`: `Код.Строку_в_байты`
+del proyecto JS equivale a `gost_text_utf16le` (UTF-8 → UTF-16LE), y las
+variantes `*_message` de la firma aplican la misma codificación que el JS.
 
 ## Convenciones de bytes
 

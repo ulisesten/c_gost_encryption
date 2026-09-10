@@ -549,6 +549,34 @@ static void test_key_agreement(void)
     CHECK(memcmp(kek_a, kek_b, 32U) == 0);
 }
 
+static void test_text_compatibility(void)
+{
+    /* The reference project hashes strings after UTF-16LE encoding. */
+    const struct {
+        const char *text;
+        const char *digest256;
+    } vectors[] = {
+        { "Chikatina", "abe508184523894f72aea279571a540424ed54b224b2e638c05e0d6ce006e512" },
+        { "Проверка", "263ab64f81382ff31b2e7cbb37cb82802c33e31f6517203f4cc7c214d8ca89b9" },
+    };
+    uint8_t digest[GOST_HASH_MAX_DIGEST];
+    for (size_t v = 0; v < sizeof(vectors) / sizeof(vectors[0]); v++) {
+        CHECK(gost_hash_text(vectors[v].text, strlen(vectors[v].text), GOST_HASH_256, digest) ==
+              GOST_OK);
+        CHECK(bytes_equal_hex(digest, 32U, vectors[v].digest256));
+    }
+
+    /* Size query without a buffer. */
+    size_t encoded_len = 0;
+    CHECK(gost_text_utf16le("AB", 2U, NULL, 0U, &encoded_len) == GOST_OK);
+    CHECK(encoded_len == 4U);
+
+    /* Invalid UTF-8 is rejected. */
+    const uint8_t broken[] = { 0xFF };
+    CHECK(gost_text_utf16le((const char *)broken, sizeof(broken), NULL, 0U, &encoded_len) ==
+          GOST_ERR_PARAM);
+}
+
 int main(void)
 {
     test_cipher_ecb();
@@ -560,6 +588,7 @@ int main(void)
     test_hash_streaming();
     test_hash_presentation_duality();
     test_hash_incremental();
+    test_text_compatibility();
     test_signature_official();
     test_signature_lifecycle();
     test_key_agreement();
