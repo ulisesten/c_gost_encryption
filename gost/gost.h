@@ -27,6 +27,7 @@
 #include "cipher/cipher.h"
 #include "hash/hash.h"
 #include "text/text.h"
+#include "kdf/kdf.h"
 #include "ecc/ecc.h"
 #include "signature/signature.h"
 #include "rng/rng.h"

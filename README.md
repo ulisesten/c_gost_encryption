@@ -9,6 +9,8 @@ para Node.js:
 | GOST 28147-89 | Cifrado simétrico: sustitución simple (ECB), gamificación, gamificación con retroalimentación (CFB) e imitovstavka (MAC) | `gost/cipher` |
 | GOST R 34.11-2012 | Hash «Streebog» de 256 y 512 bits | `gost/hash` |
 | GOST R 34.10-2012 | Firma digital: generación de claves, firma, verificación y acuerdo de claves (VKO) | `gost/signature` |
+| RFC 7836 / R 50.1.113-2016 | HMAC-Streebog de 256 y 512 bits | `gost/kdf` |
+| RFC 8018 / R 50.1.111-2016 | PBKDF2 de contraseñas con PRF HMAC-Streebog-512 | `gost/kdf` |
 | — | Aritmética de curva elíptica y conjuntos de parámetros estándar | `gost/ecc` |
 | — | Aritmética entera de ancho fijo (512/1024 bits) | `gost/bigint` |
 | — | Fuente de aleatoriedad del sistema | `gost/rng` |
@@ -107,6 +109,23 @@ bool ok = false;
 gost_signature_verify_message(gost_curve(GOST_CURVE_2001_CRYPTOPRO_C),
                               &keys.public_key, msg, msg_len, &sig, &ok);
 ```
+
+### HMAC y PBKDF2 (RFC 7836 / R 50.1.111-2016)
+
+```c
+uint8_t mac[64];
+gost_hmac(key, key_len, msg, msg_len, GOST_HASH_256, mac);   /* RFC 7836 */
+
+uint8_t dk[64];
+gost_pbkdf2(password, password_len, salt, salt_len, 100000, dk, 64);
+/* PRF según el estándar: HMAC-GOSTR3411-2012-512 interno */
+
+```
+
+Para derivar claves de contraseñas almacenadas (formato
+`$gost-pbkdf2$512$<iter>$<salt>$<dk>`) se combinan `gost_rng_system` para el
+salt aleatorio y `gost_text_utf16le` si la contraseña procede de texto. No
+existe KDF memory-hard dentro del estándar GOST; la librería no inventa uno.
 
 ## Correspondencia con el proyecto de referencia
 

@@ -577,6 +577,120 @@ static void test_text_compatibility(void)
           GOST_ERR_PARAM);
 }
 
+static void test_hmac(void)
+{
+    /* RFC 7836, appendix B: HMAC_GOSTR3411_2012 over key K and message T. */
+    uint8_t key[32];
+    for (unsigned i = 0; i < sizeof(key); i++) {
+        key[i] = (uint8_t)i;
+    }
+    uint8_t message[16];
+    hex_to_bytes("0126bdb87800af214341456563780100", message);
+    uint8_t mac[GOST_HMAC_MAX_DIGEST];
+
+    CHECK(gost_hmac(key, sizeof(key), message, sizeof(message), GOST_HASH_256, mac) == GOST_OK);
+    CHECK(bytes_equal_hex(mac, 32U,
+                          "a1aa5f7de402d7b3d323f2991c8d4534013137010a83754fd0af6d7cd4922ed9"));
+
+    CHECK(gost_hmac(key, sizeof(key), message, sizeof(message), GOST_HASH_512, mac) == GOST_OK);
+    CHECK(bytes_equal_hex(mac, 64U,
+                          "a59bab22ecae19c65fbde6e5f4e9f5d8549d31f037f9df9b905500e171923a77"
+                          "3d5f1530f2ed7e964cb2eedc29e9ad2f3afe93b2814f79f5000ffc0366c251e6"));
+
+    /* Streaming HMAC equals the one call form. */
+    gost_hmac_ctx_t ctx;
+    CHECK(gost_hmac_init(&ctx, key, sizeof(key), GOST_HASH_256) == GOST_OK);
+    gost_hmac_update(&ctx, message, 10U);
+    gost_hmac_update(&ctx, message + 10U, sizeof(message) - 10U);
+    CHECK(gost_hmac_final(&ctx, mac) == GOST_OK);
+    CHECK(bytes_equal_hex(mac, 32U,
+                          "a1aa5f7de402d7b3d323f2991c8d4534013137010a83754fd0af6d7cd4922ed9"));
+
+    /* Key longer than the block goes through K = H(key); the streaming
+       form computes the same MAC as the one call form. */
+    uint8_t long_key[80];
+    for (unsigned i = 0; i < sizeof(long_key); i++) {
+        long_key[i] = (uint8_t)(i * 5U + 1U);
+    }
+    uint8_t first[GOST_HMAC_MAX_DIGEST];
+    uint8_t second[GOST_HMAC_MAX_DIGEST];
+    gost_hmac_ctx_t state;
+    CHECK(gost_hmac(long_key, sizeof(long_key), message, sizeof(message), GOST_HASH_256, first) ==
+          GOST_OK);
+    CHECK(gost_hmac_init(&state, long_key, sizeof(long_key), GOST_HASH_256) == GOST_OK);
+    CHECK(gost_hmac_update(&state, message, sizeof(message)) == GOST_OK);
+    CHECK(gost_hmac_final(&state, second) == GOST_OK);
+    CHECK(memcmp(first, second, 32U) == 0);
+
+    /* Guards. */
+    CHECK(gost_hmac(key, sizeof(key), message, sizeof(message), (gost_hash_width_t)128, mac) ==
+          GOST_ERR_PARAM);
+    CHECK(gost_hmac(key, sizeof(key), NULL, 0U, GOST_HASH_256, NULL) == GOST_ERR_PARAM);
+}
+
+static void test_pbkdf2(void)
+{
+    /* Official vectors of draft-pkcs5-gost-02 (R 50.1.111-2016): the PRF
+       is HMAC-GOSTR3411-2012-512, fixed regardless of the output length. */
+    uint8_t derived[GOST_HMAC_MAX_DIGEST];
+
+    /* c = 1, dkLen = 64. */
+    CHECK(gost_pbkdf2((const uint8_t *)"password", 8U, (const uint8_t *)"salt", 4U, 1U, derived,
+                      64U) == GOST_OK);
+    CHECK(bytes_equal_hex(derived, 64U,
+                          "64770af7f748c3b1c9ac831dbcfd85c26111b30a8a657ddc3056b80ca73e040d"
+                          "2854fd36811f6d825cc4ab66ec0a68a490a9e5cf5156b3a2b7eecddbf9a16b47"));
+    /* c = 2, dkLen = 64. */
+    CHECK(gost_pbkdf2((const uint8_t *)"password", 8U, (const uint8_t *)"salt", 4U, 2U, derived,
+                      64U) == GOST_OK);
+    CHECK(bytes_equal_hex(derived, 64U,
+                          "5a585bafdfbb6e8830d6d68aa3b43ac00d2e4aebce01c9b31c2caed56f0236d4d"
+                          "34b2b8fbd2c4e89d54d46f50e47d45bbac301571743119e8d3c42ba66d348de"));
+    /* c = 4096, dkLen = 64. */
+    CHECK(gost_pbkdf2((const uint8_t *)"password", 8U, (const uint8_t *)"salt", 4U, 4096U,
+                      derived, 64U) == GOST_OK);
+    CHECK(bytes_equal_hex(derived, 64U,
+                          "e52deb9a2d2aaff4e2ac9d47a41f34c20376591c67807f0477e32549dc341bc7"
+                          "867c09841b6d58e29d0347c996301d55df0d34e47cf68f4e3c2cdaf1d9ab86c3"));
+    /* Long password and salt, dkLen = 100 (two blocks, truncated). */
+    const char *long_password = "passwordPASSWORDpassword";
+    const char *long_salt = "saltSALTsaltSALTsaltSALTsaltSALTsalt";
+    CHECK(gost_pbkdf2((const uint8_t *)long_password, strlen(long_password),
+                      (const uint8_t *)long_salt, strlen(long_salt), 4096U, derived,
+                      100U) == GOST_OK);
+    CHECK(bytes_equal_hex(derived, 100U,
+                          "b2d8f1245fc4d29274802057e4b54e0a0753aa22fc53760b301cf008679e58fe"
+                          "4bee9addcae99ba2b0b20f431a9c5e50f395c89387d0945aedeca6eb4015dfc2"
+                          "bd2421ee9bb71183ba882ceebfef259f33f9e27dc6178cb89dc37428cf9cc52a"
+                          "2baa2d3a"));
+    /* Embedded NUL bytes. */
+    CHECK(gost_pbkdf2((const uint8_t *)"pass\0word", 9U, (const uint8_t *)"sa\0lt", 5U, 4096U,
+                      derived, 64U) == GOST_OK);
+    CHECK(bytes_equal_hex(derived, 64U,
+                          "50df062885b69801a3c10248eb0a27ab6e522ffeb20c991c660f001475d73a4e"
+                          "167f782c18e97e92976d9c1d970831ea78ccb879f67068cdac1910740844e830"));
+
+    /* Guards. */
+    CHECK(gost_pbkdf2((const uint8_t *)"p", 1U, (const uint8_t *)"s", 1U, 0U, derived,
+                      32U) == GOST_ERR_PARAM);
+    CHECK(gost_pbkdf2((const uint8_t *)"p", 1U, (const uint8_t *)"s", 1U, 1U, NULL, 0U) ==
+          GOST_ERR_PARAM);
+}
+
+static void test_hmac_guards(void)
+{
+    uint8_t key[32];
+    for (unsigned i = 0; i < sizeof(key); i++) {
+        key[i] = (uint8_t)i;
+    }
+    uint8_t message[16];
+    hex_to_bytes("0126bdb87800af214341456563780100", message);
+    uint8_t mac[GOST_HMAC_MAX_DIGEST];
+    CHECK(gost_hmac(key, sizeof(key), message, sizeof(message), (gost_hash_width_t)128, mac) ==
+          GOST_ERR_PARAM);
+    CHECK(gost_hmac(key, sizeof(key), NULL, 0U, GOST_HASH_256, NULL) == GOST_ERR_PARAM);
+}
+
 int main(void)
 {
     test_cipher_ecb();
@@ -589,6 +703,9 @@ int main(void)
     test_hash_presentation_duality();
     test_hash_incremental();
     test_text_compatibility();
+    test_hmac();
+    test_pbkdf2();
+    test_hmac_guards();
     test_signature_official();
     test_signature_lifecycle();
     test_key_agreement();

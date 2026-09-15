@@ -15,6 +15,7 @@ add_library(gost STATIC
     gost/cipher/cipher.c
     gost/hash/hash.c
     gost/text/text.c
+    gost/kdf/kdf.c
     gost/ecc/ecc.c
     gost/signature/signature.c
     gost/rng/rng.c
