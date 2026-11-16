@@ -632,7 +632,7 @@ static void test_pbkdf2(void)
 {
     /* Official vectors of draft-pkcs5-gost-02 (R 50.1.111-2016): the PRF
        is HMAC-GOSTR3411-2012-512, fixed regardless of the output length. */
-    uint8_t derived[GOST_HMAC_MAX_DIGEST];
+    uint8_t derived[100U];  /* Largest known-answer length below. */
 
     /* c = 1, dkLen = 64. */
     CHECK(gost_pbkdf2((const uint8_t *)"password", 8U, (const uint8_t *)"salt", 4U, 1U, derived,
@@ -691,6 +691,353 @@ static void test_hmac_guards(void)
     CHECK(gost_hmac(key, sizeof(key), NULL, 0U, GOST_HASH_256, NULL) == GOST_ERR_PARAM);
 }
 
+/* Kuznyechik master key and ICN of GOST R 34.12-2015, appendix A.1. */
+#define KUZ_KEY_HEX "8899aabbccddeeff0011223344556677fedcba98765432100123456789abcdef"
+#define KUZ_ICN_HEX "1234567890abcef0"
+
+static void test_kuznyechik(void)
+{
+    uint8_t key[32];
+    hex_to_bytes(KUZ_KEY_HEX, key);
+    gost_kuznyechik_t ctx;
+    CHECK(gost_kuznyechik_init(&ctx, key) == GOST_OK);
+
+    /* Key schedule of GOST R 34.12-2015, appendix A.1.2. */
+    const char *schedule[] = {
+        "db31485315694343228d6aef8cc78c44", "3d4553d8e9cfec6815ebadc40a9ffd04",
+        "57646468c44a5e28d3e59246f429f1ac", "bd079435165c6432b532e82834da581b",
+        "51e640757e8745de705727265a0098b1", "5a7925017b9fdd3ed72a91a22286f984",
+        "bb44e25378c73123a5f32f73cdb6e517", "72e9dd7416bcf45b755dbaa88e4a4043",
+    };
+    for (size_t i = 0; i < sizeof(schedule) / sizeof(schedule[0]); i++) {
+        CHECK(bytes_equal_hex(ctx.round_keys[i + 2U], 16U, schedule[i]));
+    }
+
+    /* Encryption and decryption of the official vector, A.1.1. */
+    uint8_t plaintext[16];
+    hex_to_bytes("1122334455667700ffeeddccbbaa9988", plaintext);
+    uint8_t ciphertext[16];
+    CHECK(gost_kuznyechik_encrypt_block(&ctx, plaintext, ciphertext) == GOST_OK);
+    CHECK(bytes_equal_hex(ciphertext, 16U, "7f679d90bebc24305a468d42b9d4edcd"));
+    uint8_t decrypted[16];
+    CHECK(gost_kuznyechik_decrypt_block(&ctx, ciphertext, decrypted) == GOST_OK);
+    CHECK(memcmp(decrypted, plaintext, 16U) == 0);
+
+    /* Second block cross-checked against the gostcrypto reference. */
+    hex_to_bytes("8899aabbccddeeff0011223344556677", plaintext);
+    CHECK(gost_kuznyechik_encrypt_block(&ctx, plaintext, ciphertext) == GOST_OK);
+    CHECK(bytes_equal_hex(ciphertext, 16U, "e580a5a5c0751f27fc149c7a3117d942"));
+
+    /* Roundtrip of random-shaped data and guards. */
+    uint8_t block[16] = { 0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6,
+                          0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c };
+    CHECK(gost_kuznyechik_encrypt_block(&ctx, block, ciphertext) == GOST_OK);
+    CHECK(gost_kuznyechik_decrypt_block(&ctx, ciphertext, decrypted) == GOST_OK);
+    CHECK(memcmp(decrypted, block, 16U) == 0);
+    CHECK(gost_kuznyechik_init(NULL, key) == GOST_ERR_PARAM);
+    CHECK(gost_kuznyechik_init(&ctx, NULL) == GOST_ERR_PARAM);
+    CHECK(gost_kuznyechik_encrypt_block(&ctx, NULL, ciphertext) == GOST_ERR_PARAM);
+}
+
+static void test_cmac(void)
+{
+    uint8_t key[32];
+    hex_to_bytes(KUZ_KEY_HEX, key);
+    uint8_t tag[16];
+    uint8_t message[100];
+    for (unsigned i = 0; i < sizeof(message); i++) {
+        message[i] = (uint8_t)(i * 7U + 3U);
+    }
+
+    /* Known-answer vectors over Kuznyechik, cross-checked with the
+       gostcrypto reference (GOST R 34.13-2015, MAC mode). */
+    CHECK(gost_cmac(key, NULL, 0U, tag) == GOST_OK);
+    CHECK(bytes_equal_hex(tag, 16U, "b0ec22bff8ec720184399779c46080bd"));
+    CHECK(gost_cmac(key, message, 1U, tag) == GOST_OK);
+    CHECK(bytes_equal_hex(tag, 16U, "7fb64bbe665fb82b9201c156d3e3162b"));
+    CHECK(gost_cmac(key, message, 15U, tag) == GOST_OK);
+    CHECK(bytes_equal_hex(tag, 16U, "511d99589e2b5ee14de678dbce24dcca"));
+    CHECK(gost_cmac(key, message, 16U, tag) == GOST_OK);
+    CHECK(bytes_equal_hex(tag, 16U, "8a13bca94479d15fff5ce4df0806ca2a"));
+    CHECK(gost_cmac(key, message, 17U, tag) == GOST_OK);
+    CHECK(bytes_equal_hex(tag, 16U, "47db0ecb1a6b86290441daa1815088cc"));
+    CHECK(gost_cmac(key, message, 32U, tag) == GOST_OK);
+    CHECK(bytes_equal_hex(tag, 16U, "e099a73cc035a5a2987e730934af309f"));
+    CHECK(gost_cmac(key, message, 100U, tag) == GOST_OK);
+    CHECK(bytes_equal_hex(tag, 16U, "e9cf792ac388ea5cfeb2d7a9ea210c1a"));
+
+    /* Streaming form equals the one call form for every length class. */
+    const size_t lengths[] = { 0U, 1U, 15U, 16U, 17U, 31U, 32U, 33U, 100U };
+    for (size_t v = 0; v < sizeof(lengths) / sizeof(lengths[0]); v++) {
+        uint8_t one_shot[16];
+        CHECK(gost_cmac(key, message, lengths[v], one_shot) == GOST_OK);
+        gost_cmac_ctx_t ctx;
+        CHECK(gost_cmac_init(&ctx, key) == GOST_OK);
+        size_t half = lengths[v] / 2U;
+        CHECK(gost_cmac_update(&ctx, message, half) == GOST_OK);
+        CHECK(gost_cmac_update(&ctx, message + half, lengths[v] - half) == GOST_OK);
+        CHECK(gost_cmac_final(&ctx, tag) == GOST_OK);
+        CHECK(memcmp(tag, one_shot, 16U) == 0);
+        /* The context is erased by final; reuse yields a zeroed state. */
+        for (unsigned i = 0; i < sizeof(ctx); i++) {
+            CHECK(((const uint8_t *)&ctx)[i] == 0U);
+        }
+    }
+    CHECK(gost_cmac(key, message, 4U, NULL) == GOST_ERR_PARAM);
+}
+
+static void test_ctr_acpkm(void)
+{
+    uint8_t key[32];
+    uint8_t icn[8];
+    hex_to_bytes(KUZ_KEY_HEX, key);
+    hex_to_bytes(KUZ_ICN_HEX, icn);
+    uint8_t plaintext[300];
+    for (unsigned i = 0; i < sizeof(plaintext); i++) {
+        plaintext[i] = (uint8_t)(i * 11U + 5U);
+    }
+    uint8_t ciphertext[300];
+    uint8_t decrypted[300];
+
+    /* Multi-section message with a 128-byte section (8 blocks); known
+       answer generated over the gostcrypto block cipher following
+       RFC 8645 section 6.2.2. */
+    CHECK(gost_ctr_acpkm(key, icn, 8U, plaintext, ciphertext, 300U) == GOST_OK);
+    CHECK(bytes_equal_hex(ciphertext, 16U, "e5a7f0dca554e18977fdf1107283a79a"));
+    CHECK(bytes_equal_hex(ciphertext + 284U, 16U, "391232c40e2a6088fe7368e8f0b2e0e6"));
+    CHECK(gost_ctr_acpkm(key, icn, 8U, ciphertext, decrypted, 300U) == GOST_OK);
+    CHECK(memcmp(decrypted, plaintext, 300U) == 0);
+
+    /* Single-section message with the default 4 KiB section. */
+    CHECK(gost_ctr_acpkm(key, icn, 0U, plaintext, ciphertext, 100U) == GOST_OK);
+    CHECK(bytes_equal_hex(ciphertext, 16U, "e5a7f0dca554e18977fdf1107283a79a"));
+    CHECK(gost_ctr_acpkm(key, icn, 0U, ciphertext, decrypted, 100U) == GOST_OK);
+    CHECK(memcmp(decrypted, plaintext, 100U) == 0);
+
+    /* Streaming form with piecewise calls equals the one call form. */
+    gost_ctr_acpkm_ctx_t ctx;
+    CHECK(gost_ctr_acpkm_init(&ctx, key, icn, 8U) == GOST_OK);
+    CHECK(gost_ctr_acpkm_encrypt(&ctx, plaintext, ciphertext, 100U) == GOST_OK);
+    CHECK(gost_ctr_acpkm_encrypt(&ctx, plaintext + 100U, ciphertext + 100U, 200U) == GOST_OK);
+    CHECK(bytes_equal_hex(ciphertext, 16U, "e5a7f0dca554e18977fdf1107283a79a"));
+    CHECK(bytes_equal_hex(ciphertext + 284U, 16U, "391232c40e2a6088fe7368e8f0b2e0e6"));
+
+    /* In-place operation. */
+    uint8_t buffer[40];
+    memcpy(buffer, plaintext, 40U);
+    CHECK(gost_ctr_acpkm(key, icn, 8U, buffer, buffer, 40U) == GOST_OK);
+    CHECK(bytes_equal_hex(buffer, 16U, "e5a7f0dca554e18977fdf1107283a79a"));
+
+    CHECK(gost_ctr_acpkm_init(NULL, key, icn, 0U) == GOST_ERR_PARAM);
+    CHECK(gost_ctr_acpkm(key, NULL, 0U, plaintext, ciphertext, 10U) == GOST_ERR_PARAM);
+}
+
+static void test_hkdf(void)
+{
+    uint8_t key[32];
+    hex_to_bytes(KUZ_KEY_HEX, key);
+    const uint8_t salt[] = "salt-sess";
+    const uint8_t info[] = "gost-calls-frame-key";
+
+    /* Known-answer vectors, generated and cross-checked with the
+       independent gostcrypto HMAC (RFC 7836 presentation). */
+    uint8_t prk[64];
+    CHECK(gost_hkdf_extract(GOST_HASH_256, salt, 9U, key, 32U, prk) == GOST_OK);
+    CHECK(bytes_equal_hex(prk, 32U, "7367f187afcc2acc6167bc3f810514611090f20dc32f6f70c4ca87ffc71cb93d"));
+    CHECK(gost_hkdf_extract(GOST_HASH_512, salt, 9U, key, 32U, prk) == GOST_OK);
+    CHECK(bytes_equal_hex(prk, 64U,
+                          "2aa99f9e005df4d7481654b0f1f719c874a16da434652b790c7f10b83880d1a5"
+                          "c4e19c936d29cf27d15bbd8930fde0aed5833f5e2b179f75ceb7ed32bfc95ff3"));
+
+    uint8_t okm[80];
+    CHECK(gost_hkdf_extract(GOST_HASH_256, salt, 9U, key, 32U, prk) == GOST_OK);
+    CHECK(gost_hkdf_expand(GOST_HASH_256, prk, 32U, info, 20U, okm, 1U) == GOST_OK);
+    CHECK(bytes_equal_hex(okm, 1U, "37"));
+    CHECK(gost_hkdf_expand(GOST_HASH_256, prk, 32U, info, 20U, okm, 32U) == GOST_OK);
+    CHECK(bytes_equal_hex(okm, 32U, "37708d13787fad2ded1a6aea359a7d928bcc5fb20097e45262d53ec6534dd6f9"));
+    CHECK(gost_hkdf_expand(GOST_HASH_256, prk, 32U, info, 20U, okm, 80U) == GOST_OK);
+    CHECK(bytes_equal_hex(okm, 80U,
+                          "37708d13787fad2ded1a6aea359a7d928bcc5fb20097e45262d53ec6534dd6f9"
+                          "64052a5260477a8367113977c2fd45aabd00eb36bff6aa274f080f4f3927643"
+                          "79fd568cbb0c35017e70051ea628399aa"));
+    CHECK(gost_hkdf_extract(GOST_HASH_512, salt, 9U, key, 32U, prk) == GOST_OK);
+    CHECK(gost_hkdf_expand(GOST_HASH_512, prk, 64U, info, 20U, okm, 80U) == GOST_OK);
+    CHECK(bytes_equal_hex(okm, 80U,
+                          "07777193f0bd944e8d56d7cb75e6bee63a6c8e6d693fa5e516356b5c611d9cd4"
+                          "fd00c127dbc5673555c7c49615cdf97540462ac0818336b9eea51f48d0d8fa3"
+                          "24752f4ecc7b9ac6f75b98b5c11812db9"));
+
+    /* Absent salt and info follow RFC 5869 defaults. */
+    CHECK(gost_hkdf_extract(GOST_HASH_256, NULL, 0U, key, 32U, prk) == GOST_OK);
+    CHECK(gost_hkdf_expand(GOST_HASH_256, prk, 32U, NULL, 0U, okm, 32U) == GOST_OK);
+
+    /* Guards: short PRK and over-long output. */
+    CHECK(gost_hkdf_expand(GOST_HASH_256, prk, 31U, info, 20U, okm, 32U) == GOST_ERR_PARAM);
+    CHECK(gost_hkdf_expand(GOST_HASH_256, prk, 32U, info, 20U, okm, 255U * 32U + 1U) == GOST_ERR_PARAM);
+    CHECK(gost_hkdf_extract(GOST_HASH_256, salt, 9U, key, 32U, NULL) == GOST_ERR_PARAM);
+}
+
+static void test_aead(void)
+{
+    uint8_t key[32];
+    uint8_t nonce[16];
+    hex_to_bytes(KUZ_KEY_HEX, key);
+    hex_to_bytes("1234567890abcef0a1b2c3d4e5f60112", nonce);
+    const uint8_t aad[] = "frame-header-v1";
+    uint8_t plaintext[100];
+    for (unsigned i = 0; i < sizeof(plaintext); i++) {
+        plaintext[i] = (uint8_t)(i * 13U + 7U);
+    }
+    uint8_t ciphertext[100];
+    uint8_t tag[16];
+    uint8_t output[100];
+
+    /* Known-answer vectors of the documented construction, generated
+       over the gostcrypto primitives. */
+    CHECK(gost_aead_seal(key, nonce, aad, 15U, plaintext, 100U, ciphertext, tag) == GOST_OK);
+    CHECK(bytes_equal_hex(ciphertext, 16U, "8d18347d33f6657f1d08bb964f5bccdc2"));
+    CHECK(bytes_equal_hex(tag, 16U, "6bcfdfc958715e2e818604403fa69858"));
+    CHECK(gost_aead_seal(key, nonce, aad, 15U, plaintext, 1U, ciphertext, tag) == GOST_OK);
+    CHECK(bytes_equal_hex(ciphertext, 1U, "8d"));
+    CHECK(bytes_equal_hex(tag, 16U, "763807f2b110b36a6e309daf8f53d9b3"));
+    CHECK(gost_aead_seal(key, nonce, aad, 15U, NULL, 0U, ciphertext, tag) == GOST_OK);
+    CHECK(bytes_equal_hex(tag, 16U, "ed3c7454a6e1e9c5b0ff7297c1d916bf"));
+
+    /* Roundtrip for several length classes. */
+    const size_t lengths[] = { 0U, 1U, 16U, 17U, 100U };
+    for (size_t v = 0; v < sizeof(lengths) / sizeof(lengths[0]); v++) {
+        CHECK(gost_aead_seal(key, nonce, aad, 15U, plaintext, lengths[v], ciphertext, tag) == GOST_OK);
+        CHECK(gost_aead_open(key, nonce, aad, 15U, ciphertext, lengths[v], tag, output) == GOST_OK);
+        CHECK(memcmp(output, plaintext, lengths[v]) == 0);
+    }
+
+    /* Tampering with any input must be rejected and release no data. */
+    uint8_t broken[16];
+    CHECK(gost_aead_seal(key, nonce, aad, 15U, plaintext, 100U, ciphertext, tag) == GOST_OK);
+    memcpy(broken, tag, 16U);
+    broken[0] ^= UINT8_C(0x80);
+    CHECK(gost_aead_open(key, nonce, aad, 15U, ciphertext, 100U, broken, output) == GOST_ERR_AUTH);
+    for (unsigned i = 0; i < 100U; i++) {
+        CHECK(output[i] == 0U);
+    }
+    CHECK(gost_aead_open(key, nonce, aad, 15U, ciphertext, 100U, tag, output) == GOST_OK);
+    ciphertext[50] ^= UINT8_C(0x01);
+    CHECK(gost_aead_open(key, nonce, aad, 15U, ciphertext, 100U, tag, output) == GOST_ERR_AUTH);
+    ciphertext[50] ^= UINT8_C(0x01);
+    CHECK(gost_aead_open(key, nonce, aad, 14U, ciphertext, 100U, tag, output) == GOST_ERR_AUTH);
+    nonce[15] ^= UINT8_C(0x01);
+    CHECK(gost_aead_open(key, nonce, aad, 15U, ciphertext, 100U, tag, output) == GOST_ERR_AUTH);
+    nonce[15] ^= UINT8_C(0x01);
+
+    /* A wrong key yields a different ciphertext and tag. */
+    uint8_t other_key[32];
+    hex_to_bytes("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff", other_key);
+    uint8_t other_tag[16];
+    CHECK(gost_aead_seal(other_key, nonce, aad, 15U, plaintext, 100U, ciphertext, other_tag) == GOST_OK);
+    CHECK(gost_aead_open(other_key, nonce, aad, 15U, ciphertext, 100U, other_tag, output) == GOST_OK);
+    CHECK(memcmp(output, plaintext, 100U) == 0);
+    CHECK(gost_aead_seal(key, nonce, aad, 15U, plaintext, 100U, NULL, tag) == GOST_ERR_PARAM);
+}
+
+static void test_sframe(void)
+{
+    gost_sframe_ctx_t ctx;
+    uint8_t key[32];
+    hex_to_bytes(KUZ_KEY_HEX, key);
+    CHECK(gost_sframe_init(&ctx) == GOST_OK);
+
+    /* Roundtrip of an audio-shaped frame. */
+    uint8_t audio[160];
+    for (unsigned i = 0; i < sizeof(audio); i++) {
+        audio[i] = (uint8_t)(i * 3U + 1U);
+    }
+    uint8_t wire[400];
+    size_t wire_len = 0U;
+    CHECK(gost_sframe_set_key(&ctx, 7U, key) == GOST_OK);
+    CHECK(gost_sframe_encrypt(&ctx, audio, sizeof(audio), wire, sizeof(wire), &wire_len) == GOST_OK);
+    CHECK(wire_len == GOST_SFRAME_OVERHEAD + sizeof(audio));
+    CHECK(wire[0] == UINT8_C(0x01));
+    CHECK(wire[1] == UINT8_C(0x07));
+    uint8_t plaintext[400];
+    size_t plaintext_len = 0U;
+    CHECK(gost_sframe_decrypt(&ctx, wire, wire_len, plaintext, sizeof(plaintext), &plaintext_len) == GOST_OK);
+    CHECK(plaintext_len == sizeof(audio));
+    CHECK(memcmp(plaintext, audio, sizeof(audio)) == 0);
+
+    /* Counter of the sender key advances per frame. */
+    CHECK(gost_sframe_encrypt(&ctx, audio, sizeof(audio), wire, sizeof(wire), &wire_len) == GOST_OK);
+    CHECK(wire[9] == UINT8_C(0x02));
+    CHECK(gost_sframe_decrypt(&ctx, wire, wire_len, plaintext, sizeof(plaintext), &plaintext_len) == GOST_OK);
+
+    /* Replaying an already accepted frame must be rejected. */
+    uint8_t replay[400];
+    size_t frame_len = wire_len;
+    memcpy(replay, wire, wire_len);
+    CHECK(gost_sframe_encrypt(&ctx, audio, sizeof(audio), wire, sizeof(wire), &wire_len) == GOST_OK);
+    CHECK(gost_sframe_decrypt(&ctx, replay, frame_len, plaintext, sizeof(plaintext),
+                              &plaintext_len) == GOST_ERR_AUTH);
+
+    /* Tampering with the ciphertext must be rejected. */
+    CHECK(gost_sframe_encrypt(&ctx, audio, sizeof(audio), wire, sizeof(wire), &wire_len) == GOST_OK);
+    frame_len = wire_len;
+    wire[GOST_SFRAME_HEADER] ^= UINT8_C(0x01);
+    CHECK(gost_sframe_decrypt(&ctx, wire, wire_len, plaintext, sizeof(plaintext),
+                              &plaintext_len) == GOST_ERR_AUTH);
+    wire[GOST_SFRAME_HEADER] ^= UINT8_C(0x01);
+    CHECK(gost_sframe_decrypt(&ctx, wire, frame_len, plaintext, sizeof(plaintext), &plaintext_len) == GOST_OK);
+
+    /* Unknown KID and wrong version. */
+    wire[1] = UINT8_C(9);
+    CHECK(gost_sframe_decrypt(&ctx, wire, frame_len, plaintext, sizeof(plaintext),
+                              &plaintext_len) == GOST_ERR_STATE);
+    wire[1] = UINT8_C(0x07);
+    wire[0] = UINT8_C(0x02);
+    CHECK(gost_sframe_decrypt(&ctx, wire, frame_len, plaintext, sizeof(plaintext),
+                              &plaintext_len) == GOST_ERR_STATE);
+    wire[0] = UINT8_C(0x01);
+
+    /* Epoch rotation: re-registering a KID resets the counter. */
+    uint8_t next_key[32];
+    hex_to_bytes("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff", next_key);
+    CHECK(gost_sframe_set_key(&ctx, 7U, next_key) == GOST_OK);
+    CHECK(gost_sframe_encrypt(&ctx, audio, sizeof(audio), wire, sizeof(wire), &wire_len) == GOST_OK);
+    CHECK(wire[9] == UINT8_C(0x01));
+    CHECK(gost_sframe_decrypt(&ctx, wire, wire_len, plaintext, sizeof(plaintext), &plaintext_len) == GOST_OK);
+
+    /* Sender selection and guards. */
+    uint8_t kid3_key[32];
+    memcpy(kid3_key, key, sizeof(key));
+    CHECK(gost_sframe_set_key(&ctx, 3U, kid3_key) == GOST_OK);
+    CHECK(gost_sframe_set_sender(&ctx, 3U) == GOST_OK);
+    CHECK(gost_sframe_encrypt(&ctx, audio, sizeof(audio), wire, sizeof(wire), &wire_len) == GOST_OK);
+    CHECK(wire[1] == UINT8_C(0x03));
+    CHECK(gost_sframe_decrypt(&ctx, wire, wire_len, plaintext, sizeof(plaintext), &plaintext_len) == GOST_OK);
+    CHECK(gost_sframe_encrypt(&ctx, audio, sizeof(audio), wire, GOST_SFRAME_OVERHEAD - 1U, &wire_len) ==
+          GOST_ERR_PARAM);
+    CHECK(gost_sframe_decrypt(&ctx, wire, 5U, plaintext, sizeof(plaintext), &plaintext_len) ==
+          GOST_ERR_PARAM);
+    CHECK(gost_sframe_encrypt(&ctx, audio, sizeof(audio), wire, sizeof(wire), NULL) == GOST_ERR_PARAM);
+}
+
+static void test_utils(void)
+{
+    uint8_t secret[16];
+    memset(secret, UINT8_C(0xab), sizeof(secret));
+    gost_secure_zero(secret, sizeof(secret));
+    for (unsigned i = 0; i < sizeof(secret); i++) {
+        CHECK(secret[i] == 0U);
+    }
+    gost_secure_zero(NULL, 8U);
+
+    const uint8_t left[8] = { 1, 2, 3, 4, 5, 6, 7, 8 };
+    uint8_t right[8] = { 1, 2, 3, 4, 5, 6, 7, 8 };
+    CHECK(gost_ct_equal(left, right, sizeof(left)) == 1);
+    right[7] = 9U;
+    CHECK(gost_ct_equal(left, right, sizeof(left)) == 0);
+    CHECK(gost_ct_equal(NULL, right, sizeof(left)) == 0);
+    CHECK(gost_ct_equal(left, right, 0U) == 1);
+}
+
 int main(void)
 {
     test_cipher_ecb();
@@ -706,6 +1053,13 @@ int main(void)
     test_hmac();
     test_pbkdf2();
     test_hmac_guards();
+    test_kuznyechik();
+    test_cmac();
+    test_ctr_acpkm();
+    test_hkdf();
+    test_aead();
+    test_sframe();
+    test_utils();
     test_signature_official();
     test_signature_lifecycle();
     test_key_agreement();

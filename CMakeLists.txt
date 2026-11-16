@@ -16,9 +16,16 @@ add_library(gost STATIC
     gost/hash/hash.c
     gost/text/text.c
     gost/kdf/kdf.c
+    gost/kdf/hkdf.c
+    gost/kuznyechik/kuznyechik.c
+    gost/cmac/cmac.c
+    gost/ctr/ctr.c
+    gost/aead/aead.c
+    gost/sframe/sframe.c
     gost/ecc/ecc.c
     gost/signature/signature.c
     gost/rng/rng.c
+    gost/common.c
 )
 add_library(gost::gost ALIAS gost)
 

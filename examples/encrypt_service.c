@@ -76,7 +76,7 @@ int main(void)
         return 1;
     }
     gost_signature_t signature;
-    gost_signature_sign_message(curve, &keys.private_key, message, len, gost_rng_system, NULL,
+    gost_signature_sign_message(curve, &keys.private_key, (const uint8_t *)message, len, gost_rng_system, NULL,
                                 &signature);
     uint8_t r[64];
     uint8_t s[64];
@@ -86,7 +86,7 @@ int main(void)
     print_hex("signature s:", s, 32U);
 
     bool valid = false;
-    gost_signature_verify_message(curve, &keys.public_key, message, len, &signature, &valid);
+    gost_signature_verify_message(curve, &keys.public_key, (const uint8_t *)message, len, &signature, &valid);
     printf("verified:   %s\n", valid ? "true" : "false");
     return valid ? 0 : 1;
 }

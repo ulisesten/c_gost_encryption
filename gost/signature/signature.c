@@ -263,7 +263,6 @@ gost_status_t gost_signature_validate(const gost_curve_t *curve, const gost_key_
 {
     *valid = false;
     const gost_u512_t four = gost_u512_from_u64(4U);
-    const gost_u512_t zero = gost_u512_zero();
     gost_u512_t a3 = gost_u512_zero();
     gost_status_t status = gost_u512_mul_mod(curve->a, curve->a, curve->p, &a3);
     if (status != GOST_OK) {
