@@ -1,6 +1,8 @@
 # Requerimiento: Kuznyechik, CTR-ACPKM/CMAC, HKDF-Streebog y AEAD/SFrame-GOST
 
-- **Estado:** propuesta para implementar.
+- **Estado:** implementado (commit `b9366d9`, rama `develop`). Pendiente:
+  auditoría externa, benchmarks en Android/Windows e integración probada
+  desde `cws_sodastream`.
 - **Origen:** `cws_sodastream` (llamadas E2EE, propuesta `docs/calls_proposal.md`).
 - **Base:** `c_gost_encryption` en `aedd242` (main).
 - **Objetivo:** completar la librería para el cifrado de contenido de llamadas
@@ -254,13 +256,15 @@ y las garantías.
 
 ## 10. Criterios de aceptación
 
-- [ ] `ctest` pasa en Linux; build limpio con `-Wall -Wextra`.
-- [ ] Vectores oficiales de Kuznyechik/CTR-ACPKM/CMAC pasan.
-- [ ] HKDF/AEAD/SFrame con vectores y pruebas de tamper/replay.
-- [ ] Sin malloc/estado global; sin dependencias externas.
-- [ ] Benchmarks publicados.
+- [x] `ctest` pasa en Linux; build limpio con `-Wall -Wextra` (4592 comprobaciones).
+- [x] Vectores oficiales de Kuznyechik/CTR-ACPKM/CMAC pasan (A.1 de
+  34.12-2015; ACPKM validado contra el ejemplo AES-256 de RFC 8645; CMAC
+  contra `gostcrypto`).
+- [x] HKDF/AEAD/SFrame con vectores y pruebas de tamper/replay.
+- [x] Sin malloc/estado global; sin dependencias externas.
+- [x] Benchmarks publicados (Linux x86_64; Android/Windows pendiente).
 - [ ] Revisión de constant-time y auditoría externa (o plan firmado).
-- [ ] Documentación y ejemplo.
+- [x] Documentación y ejemplo (`examples/aead.c`, Doxygen 0 avisos).
 - [ ] Integración probada desde `cws_sodastream` en un spike.
 
 ## 11. Fuera de alcance
